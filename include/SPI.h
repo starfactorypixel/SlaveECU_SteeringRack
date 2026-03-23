@@ -3,6 +3,7 @@
 #include <SPIManager.h>
 #include <drivers/SPI_ZD25Q80B.h>
 #include <drivers/SPI_CAT25080.h>
+#include <drivers/SPI_MCP2515.h>
 #include "SPIFast.h"
 
 extern SPI_HandleTypeDef hspi2;
@@ -42,6 +43,8 @@ namespace SPI
 	SPIManager<4> manager(SPI_Config, SPI_Write, SPI_Read, SPI_WriteRead);
 	SPI_ZD25Q80B flash({GPIOB, GPIO_PIN_12}, SPI_BAUDRATEPRESCALER_2);
 	SPI_CAT25080 eeprom({GPIOA, GPIO_PIN_8}, SPI_BAUDRATEPRESCALER_8);
+	SPI_MCP2515 can1({GPIOB, GPIO_PIN_10}, {GPIOB, GPIO_PIN_11}, SPI_BAUDRATEPRESCALER_8);
+	SPI_MCP2515 can2({GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_4}, SPI_BAUDRATEPRESCALER_8);
 
 	/*
 	#define COMPILE_TIME_SIZEOF(t)      template<int s> struct SIZEOF_ ## t ## _IS; \
@@ -134,8 +137,10 @@ namespace SPI
 		
 		manager.AddDevice(flash);
 		manager.AddDevice(eeprom);
-		//manager.AddDevice(hc595);
-		//manager.AddDevice(hc165);
+		manager.AddDevice(can1);
+		manager.AddDevice(can2);
+
+
 		
 
 		uint8_t dev_id[3] = {0x00};

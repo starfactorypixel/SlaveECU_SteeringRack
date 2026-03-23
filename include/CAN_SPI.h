@@ -1,101 +1,14 @@
 #pragma once
 #include <inttypes.h>
-#include <EasyPinD.h>
-#include <SPIManager.h>
-#include <drivers/SPI_MCP2515.h>
+#include <DrakePinD.hpp>
 #include <SteeringAngleSensor.h>
-
-extern SPI_HandleTypeDef hspi1;
 
 namespace CAN_SPI
 {
-	
-	static constexpr EasyPinD::d_pin_t CAN1_SPI_CS = {GPIOB, GPIO_PIN_11};
-	static constexpr EasyPinD::d_pin_t CAN1_RX_INT = {GPIOB, GPIO_PIN_10};
-	static constexpr EasyPinD::d_pin_t CAN1_RS = {GPIOB, GPIO_PIN_2};
-	static constexpr EasyPinD::d_pin_t CAN1_SENS_PWR = {GPIOA, GPIO_PIN_3};
-	
-	static constexpr EasyPinD::d_pin_t CAN2_SPI_CS = {GPIOB, GPIO_PIN_3};
-	static constexpr EasyPinD::d_pin_t CAN2_RX_INT = {GPIOB, GPIO_PIN_4};
-	static constexpr EasyPinD::d_pin_t CAN2_RS = {GPIOB, GPIO_PIN_8};
-	static constexpr EasyPinD::d_pin_t CAN2_SENS_PWR = {GPIOA, GPIO_PIN_4};
-	
-	
-	
 	void OnSteeringAngleSensorError(uint8_t id, SteeringAngleSensorBase::error_t code);
-	
-	
 	
 	SteeringAngleSensor sensor1(SteeringRack::RACK_1, OnSteeringAngleSensorError);
 	SteeringAngleSensor sensor2(SteeringRack::RACK_2, OnSteeringAngleSensorError);
-	
-	
-	inline void SPI_Config(const SPIManagerInterface::spi_config_t &config)
-	{
-		if(hspi1.Init.BaudRatePrescaler == config.prescaler && hspi1.Init.FirstBit == config.first_bit) return;
-
-		
-		hspi1.Init.BaudRatePrescaler = config.prescaler;
-		hspi1.Init.FirstBit = config.first_bit;
-		HAL_SPI_Init(&hspi1);
-	}
-
-	inline void SPI_Write(uint8_t *data, uint16_t length)
-	{
-		//HAL_SPI_Transmit(&hspi1, data, length, 100);
-		HAL_SPI_WriteFast(&hspi1, data, length, 100);
-	}
-
-	inline void SPI_Read(uint8_t *data, uint16_t length)
-	{
-		//HAL_SPI_Receive(&hspi1, data, length, 100);
-		HAL_SPI_ReadFast(&hspi1, data, length, 100);
-	}
-
-	inline void SPI_WriteRead(uint8_t *tx_data, uint8_t *rx_data, uint16_t length)
-	{
-		//HAL_SPI_TransmitReceive(&hspi1, tx_data, rx_data, length, 200);
-		HAL_SPI_WriteReadFast(&hspi1, tx_data, rx_data, length, 200);
-	}
-	
-	
-	void CAN_RX(SteeringRack::rack_id_t id, uint32_t address, uint8_t *data, uint8_t length)
-	{
-		bool result;
-		uint32_t time;
-		
-		switch(id)
-		{
-			case SteeringRack::RACK_1:
-			{
-				time = HAL_GetTick();
-				
-				result = sensor1.PutPacket(time, address, data, length);
-				if(result == true)
-				{
-					SteeringRack::OnDataSensor( id, sensor1.data_float->angle, sensor1.data_float->roll, sensor1.data_float->dt );
-
-					//DEBUG_LOG_TOPIC("ExCAN RX", "Port: %d, Addr: %04X, Angle: %+05d, Roll: %+05d, Err: %02d\n", id, address, sensor1.data_int->angle, sensor1.data_int->roll, sensor1.data_int->error);
-				}
-				
-				break;
-			}
-			case SteeringRack::RACK_2:
-			{
-				time = HAL_GetTick();
-				
-				result = sensor2.PutPacket(time, address, data, length);
-				if(result == true)
-				{
-					SteeringRack::OnDataSensor( id, sensor2.data_float->angle, sensor2.data_float->roll, sensor2.data_float->dt );
-				}
-				
-				break;
-			}
-		}
-		
-		return;
-	}
 	
 	void OnSteeringAngleSensorError(uint8_t id, SteeringAngleSensorBase::error_t code)
 	{
@@ -105,39 +18,79 @@ namespace CAN_SPI
 		return;
 	}
 	
-	
-	
-	SPIManager<2> can_manager(SPI_Config, SPI_Write, SPI_Read, SPI_WriteRead);
-	SPI_MCP2515 can1(CAN1_SPI_CS, CAN1_RX_INT, SPI_BAUDRATEPRESCALER_8);
-	SPI_MCP2515 can2(CAN2_SPI_CS, CAN2_RX_INT, SPI_BAUDRATEPRESCALER_8);
-	EasyPinD pin_rs_1(CAN1_RS.Port, {CAN1_RS.Pin, GPIO_MODE_OUTPUT_OD, GPIO_NOPULL, GPIO_SPEED_FREQ_HIGH}, GPIO_PIN_SET);
-	EasyPinD pin_sens_1(CAN1_SENS_PWR.Port, {CAN1_SENS_PWR.Pin, GPIO_MODE_OUTPUT_PP, GPIO_NOPULL, GPIO_SPEED_FREQ_HIGH}, GPIO_PIN_RESET);
-	EasyPinD pin_rs_2(CAN2_RS.Port, {CAN2_RS.Pin, GPIO_MODE_OUTPUT_OD, GPIO_NOPULL, GPIO_SPEED_FREQ_HIGH}, GPIO_PIN_SET);
-	EasyPinD pin_sens_2(CAN2_SENS_PWR.Port, {CAN2_SENS_PWR.Pin, GPIO_MODE_OUTPUT_PP, GPIO_NOPULL, GPIO_SPEED_FREQ_HIGH}, GPIO_PIN_RESET);
+	void CAN_RX(uint8_t can_port, uint32_t address, uint8_t *data, uint8_t length)
+	{
+		bool result;
+		uint32_t time;
+		
+		switch(can_port)
+		{
+			case 1:
+			{
+				time = HAL_GetTick();
+				
+				result = sensor1.PutPacket(time, address, data, length);
+				if(result == true)
+				{
+					SteeringRack::OnDataSensor( SteeringRack::RACK_1, sensor1.data_float->angle, sensor1.data_float->roll, sensor1.data_float->dt );
+
+					//DEBUG_LOG_TOPIC("ExCAN RX", "Port: %d, Addr: %04X, Angle: %+05d, Roll: %+05d, Err: %02d\n", id, address, sensor1.data_int->angle, sensor1.data_int->roll, sensor1.data_int->error);
+				}
+				
+				break;
+			}
+			case 2:
+			{
+				time = HAL_GetTick();
+				
+				result = sensor2.PutPacket(time, address, data, length);
+				if(result == true)
+				{
+					SteeringRack::OnDataSensor( SteeringRack::RACK_2, sensor2.data_float->angle, sensor2.data_float->roll, sensor2.data_float->dt );
+				}
+				
+				break;
+			}
+		}
+		
+		return;
+	}	
+
+
+
+	// Управления питанием 12V на внешние CAN устройство
+	DrakePinD Vcc1En({GPIOA, GPIO_PIN_3}, DrakePin::Output, DrakePin::Low);
+	DrakePinD Vcc2En({GPIOA, GPIO_PIN_4}, DrakePin::Output, DrakePin::Low);
+
+	// Управление сном CAN передатчика
+	DrakePinD Can1Stby({GPIOB, GPIO_PIN_2}, DrakePin::OutputOpenDrain, DrakePin::High);
+	DrakePinD Can2Stby({GPIOB, GPIO_PIN_8}, DrakePin::OutputOpenDrain, DrakePin::High);
 
 
 
 
 	inline void Setup()
 	{
-		pin_rs_1.Init();
-		pin_sens_1.Init();
-		pin_rs_2.Init();
-		pin_sens_2.Init();
+		Vcc1En.Init();
+		Vcc2En.Init();
+		Can1Stby.Init();
+		Can2Stby.Init();
+		// Реализовать управление
+		
+		SPI::can1.begin(8000000, 500000, [](uint32_t address, uint8_t *data, uint8_t length){ CAN_RX(1, address, data, length); });
+		SPI::can2.begin(8000000, 500000, [](uint32_t address, uint8_t *data, uint8_t length){ CAN_RX(2, address, data, length); });
 
-		can_manager.AddDevice(can1);
-		can_manager.AddDevice(can2);
 
-		can1.begin(8000000, 500000, [](uint32_t address, uint8_t *data, uint8_t length){ CAN_RX(SteeringRack::RACK_1, address, data, length); });
-		can2.begin(8000000, 500000, [](uint32_t address, uint8_t *data, uint8_t length){ CAN_RX(SteeringRack::RACK_2, address, data, length); });
 
 		sensor1.SetOffset( Config::obj.body.rack1.offset );
 		sensor1.SetInvert( Config::obj.body.rack1.invert );
 		sensor2.SetOffset( Config::obj.body.rack2.offset );
 		sensor2.SetInvert( Config::obj.body.rack2.invert );
 
-		pin_sens_1.On();
-		pin_sens_2.On();
+		Vcc1En.On();
+		Vcc2En.On();
+		Can1Stby.Off();
+		Can2Stby.Off();
 
 		
 		return;
@@ -145,7 +98,6 @@ namespace CAN_SPI
 	
 	inline void Loop(uint32_t &current_time)
 	{
-		can_manager.Tick(current_time);
 		
 		sensor1.Tick(current_time);
 		sensor2.Tick(current_time);
