@@ -82,10 +82,10 @@ namespace CAN_SPI
 
 
 
-		sensor1.SetOffset( Config::obj.body.rack1.offset );
-		sensor1.SetInvert( Config::obj.body.rack1.invert );
-		sensor2.SetOffset( Config::obj.body.rack2.offset );
-		sensor2.SetInvert( Config::obj.body.rack2.invert );
+		sensor1.SetOffset( Config::Obj().rack1.offset );
+		sensor1.SetInvert( Config::Obj().rack1.invert );
+		sensor2.SetOffset( Config::Obj().rack2.offset );
+		sensor2.SetInvert( Config::Obj().rack2.invert );
 
 		Vcc1En.On();
 		Vcc2En.On();

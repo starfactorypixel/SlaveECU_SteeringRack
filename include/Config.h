@@ -1,276 +1,184 @@
 #pragma once
 #include <inttypes.h>
-#include <CUtils.h>
 #include "ConfigData.h"
 
 extern CRC_HandleTypeDef hcrc;
 
 namespace Config
 {
-	static constexpr uint16_t EEPROM_OFFSET_MAIN = 0;
-	static constexpr uint16_t DATA_SIZE = 256;
-	static constexpr uint16_t DATA_H_SIZE = 9;
-	static constexpr uint16_t DATA_PAGE_SIZE = SPI::eeprom.EEPROM_PAGE_SIZE;
-	static constexpr uint16_t EEPROM_OFFSET_MIRROR = DATA_SIZE + EEPROM_OFFSET_MAIN;
-	static constexpr uint32_t MIRROR_TIME_SYNC = 10 * 60 * 1000;
+	/*
+		Под конфиг выделен 1 сектор = 4 КБ или 16 страниц по 256 байт.
+		Данные сохраняются последовательно в каждый сектор по очереди ( при условии что данные изменились, например проверка по CRC32 всей config_root_t ).
+		Под данные может быть выделено более одной страницы (256 байт) при этом последовательная логика сохраняется.
+		При чтении вначале читается заголовок и сравнивается со следующим заголовком. Таким образом находится страница самой свежей конфигурации.
+		Затем читается весь блок данных в структуру config_root_t. При этом сохраняется номер страницы актуального конфига и подсчитывается CRC config_root_t, 
+			или чтобы не создавать иной алгоритм используется поле crc32.
+		При записи вначале делается проверка на наличие изменений. Для этого высчитывается новый crc32 для config_root_t ( с учётом замещения crc32 поля нулями на момент расчёта ), 
+			и сравнивается с сохранённым crc32, что даёт флаг о наличии изменения в настройках.
+		Затем мы инструментируем счётчик страниц, который получили при чтении с учётом перехода через границу зоны настроек (16 страниц) и размера поля данных, Например:
+			Если config_root_t = 1 страницы, то пишем конфиг в   0 >>   1 >> .. >>    15 >>   0 ..
+			Если config_root_t = 2 страницы, то пишем конфиг в 0-1 >> 2-3 >> .. >> 14-15 >> 0-1 ..
+			Если config_root_t = 3 страницы, то пишем конфиг в 0-2 >> 3-5 >> .. >> 12-14 >> 0-2 ..
+		После инструментируем счётчик записей, обновляем поле crc32 для всей config_root_t, очищает страницы и записываем данные.
+	*/
+
+	static constexpr uint8_t CFG_VERSION = 3;
+
+	// Смещение начала блока с конфигом, в страницах
+	static constexpr uint16_t NOR_PAGE_OFFSET = 0;
+
+	// Размер страницы NOR
+	static constexpr uint16_t NOR_PAGE_SIZE = SPI::flash.NOR_PAGE_SIZE;
+
+	// Кол-во страниц, выделенные под настройки для поочередной записи
+	static constexpr uint16_t NOR_PAGE_COUNT = 16;
+
+	// Интервал проверки и сохранения буфера в память
+	static constexpr uint32_t NOR_WRITE_DELAY_MS = 30000;
 	
-	static_assert(EEPROM_OFFSET_MAIN % DATA_PAGE_SIZE == 0, "EEPROM_OFFSET_MAIN must be a multiple of 32!");
 	
-	// Общая структура всего блока данных
-	struct __attribute__((packed)) eeprom_t
+	// Структура заголовка конфигурации в NOR памяти
+	struct __attribute__((packed)) config_header_t
 	{
 		// Версия формата заголовка, а так-же флаг наличия записи в блоке (если 0x00 или 0xFF, то считаем что блок не инициализирован)
-		uint8_t verison = 0x02;
-		
+		uint8_t verison;
+
 		// Счётчик записей в память
-		uint32_t counter = 0x00000001;
-		
-		// Блок полезных данных
-		eeprom_body_t body;
-		
-		// Заполнитель пустого места в объекте
-		uint8_t _reserved[ (DATA_SIZE - DATA_H_SIZE - sizeof(eeprom_body_t)) ];
-		
-		// Контрольная сумма всей структуры
-		uint32_t crc32;
-	} obj;
-	static_assert(sizeof(eeprom_t) == DATA_SIZE, "Structures should have the same size!");
-
-
-
-
-
-
-
-
-
-
-
-
-	struct __attribute__((packed)) eeprom_page_t
-	{
-		// 1 байт - Версия
-		uint8_t version = 0x03;
-
-		// 3 байта - Счётчик записей
 		uint32_t counter : 24;
 
-		// 26 байт - Полезная нагрузка
-		uint8_t payload[26];
-
-		// 2 байта - Контрольная сумма
-		uint16_t crc;
+		// Контрольная сумма всей структуры
+		uint32_t crc32;
 	};
-	static_assert(sizeof(eeprom_page_t) == DATA_PAGE_SIZE, "The structure must be of size DATA_PAGE_SIZE!");
 
-
-	static constexpr uint16_t PAYLOAD_SIZE = sizeof(eeprom_page_t::payload);
-	static constexpr uint16_t CRC_LENGTH = sizeof(eeprom_page_t) - 2;
-	
-	
-	
-	bool LoadPage2(uint8_t idx, const eeprom_page_t &page)
+	// Общая структура всего блока данных
+	struct __attribute__((packed)) config_root_t
 	{
-		bool result = false;
+		// Заголовок
+		config_header_t header;
 		
-		SPI::eeprom.ReadPage(idx, ((uint8_t *) &page));
-		if(page.version > 0x00 && page.version < 0xFF)
-		{
-			if(CRC16_XModem( ((uint8_t *) &page), CRC_LENGTH ) == page.crc)
-			{
-				result = true;
-			}
-		}
-		
-		return result;
+		// Блок данных
+		config_body_t body;
+	} config_obj;
+	
+	
+	// Кол-во страниц, которые занимает весь конфиг целиком
+	static constexpr uint16_t CFG_PAGES_COUNT = (sizeof(config_root_t) + (NOR_PAGE_SIZE - 1)) / NOR_PAGE_SIZE;
+
+	
+	// Работаем с CRC32, поэтому для упрощения общий массив данных должен быть кратен 4
+	static_assert(sizeof(config_root_t) % 4 == 0, "config_root_t must be a multiple of 4!");
+
+	// Проверяем что смещение + кол-во сраниц слезает в память
+	static_assert(NOR_PAGE_OFFSET + NOR_PAGE_COUNT - 1 <= SPI::flash.NOR_MAX_PAGE, "config_root_t must be a multiple of 4!");
+	
+	
+	// Индекс последний страницы с актуальным конфигом, без учёта NOR_PAGE_OFFSET
+	uint16_t global_page_idx = 0;
+	
+	
+	config_body_t &Obj()
+	{
+		return config_obj.body;
 	}
 	
-	bool SavePage2(uint8_t idx, const eeprom_page_t &page)
+	
+	uint16_t _GetNextPageIdxToWriteConfig()
 	{
-		bool result = false;
-
-		SPI::eeprom.WritePage(idx, ((uint8_t *) &page));
-		result = true;
+		global_page_idx += CFG_PAGES_COUNT;
+		if(global_page_idx + CFG_PAGES_COUNT > NOR_PAGE_COUNT)
+			global_page_idx = 0;
 		
-		return result;
+		return global_page_idx;
 	}
 	
-	bool UpdatePage2(uint8_t idx, const eeprom_page_t &page)
+	void _PreWriteConfig()
 	{
-		bool result = false;
-		
-		eeprom_page_t page_in_ee;
-		if(LoadPage2(idx, page_in_ee) == true)
-		{
-			if( memcmp( ((uint8_t *) &page_in_ee.payload), ((uint8_t *) &page.payload), PAYLOAD_SIZE ) != 0 )
-			{
-				memcpy( ((uint8_t *) &page_in_ee.payload), ((uint8_t *) &page.payload), PAYLOAD_SIZE );
-				page_in_ee.counter++;
-				page_in_ee.crc = CRC16_XModem( ((uint8_t *) &page_in_ee), CRC_LENGTH );
-				
-				result = SavePage2(idx, page);
-			}
-		}
-		
-		return result;
-	}
-
-	void LoadConfig2()
-	{
-		uint16_t payload_length = sizeof(eeprom_body_t);
-		uint8_t  payload_count = (sizeof(eeprom_body_t) + PAYLOAD_SIZE - 1) / PAYLOAD_SIZE;
-		uint16_t payload_offset = 0;
-		
-		eeprom_page_t page;
-		for(uint8_t idx = 0; idx < payload_count; ++idx)
-		{
-			if(LoadPage2(idx, page) == true)
-			{
-				memcpy( ((uint8_t *) &config) + payload_offset, ((uint8_t *) &page.payload), PAYLOAD_SIZE );
-			}
-			else
-			{
-				DEBUG_LOG_TOPIC("EELoad", "Load error, page: %d, data:\n", idx);
-				DEBUG_LOG_ARRAY_HEX("EE", ((uint8_t *) &page), sizeof(page));
-				DEBUG_LOG_NEW_LINE();
-			}
-			
-			payload_offset += PAYLOAD_SIZE;
-		}
-	}
-	
-	void SaveConfig2()
-	{
-		uint16_t payload_length = sizeof(eeprom_body_t);
-		uint8_t  payload_count = (sizeof(eeprom_body_t) + PAYLOAD_SIZE - 1) / PAYLOAD_SIZE;
-		uint16_t payload_offset = 0;
-		
-		eeprom_page_t page;
-		for(uint8_t idx = 0; idx < payload_count; ++idx)
-		{
-			/*
-			if(LoadPage2(idx, page) == true)
-			{
-				if( memcmp( ((uint8_t *) &config) + payload_offset, ((uint8_t *) &page.payload), PAYLOAD_SIZE ) != 0 )
-				{
-					memcpy( ((uint8_t *) &page.payload), ((uint8_t *) &config) + payload_offset, PAYLOAD_SIZE );
-					page.counter++;
-					page.crc = CRC16_XModem( ((uint8_t *) &page), CRC_LENGTH );
-					
-					SavePage2(idx, page);
-				}
-			}
-			*/
-			
-			memcpy( ((uint8_t *) &page.payload), ((uint8_t *) &config) + payload_offset, PAYLOAD_SIZE );
-			if(UpdatePage2(idx, page) == true)
-			{
-
-			}
-			else
-			{
-				DEBUG_LOG_TOPIC("EESave", "Load error, page: %d, data:\n", idx);
-				DEBUG_LOG_ARRAY_HEX("EE", ((uint8_t *) &page), sizeof(page));
-				DEBUG_LOG_NEW_LINE();
-			}
-			
-			payload_offset += PAYLOAD_SIZE;
-		}
-	}
-
-
-
-
-
-
-
-
-
-
-
-
-
-	
-	
-	uint32_t GetCRCObj()
-	{
-		return HAL_CRC_Calculate(&hcrc, (uint32_t *) &obj, ((sizeof(obj) - 4) / 4));
-	}
-	
-	void CoolSave(uint16_t eeprom_offset)
-	{
-		static uint8_t data[DATA_SIZE] = {};
-		
-		SPI::eeprom.ReadRaw(eeprom_offset, data);
-
-		// Обновляем метаданные
-		obj.counter++;
-		obj.crc32 = GetCRCObj();
-		
-		for(uint8_t page = 0; page < (DATA_SIZE / DATA_PAGE_SIZE); ++page)
-		{
-			uint16_t offset = page * DATA_PAGE_SIZE;
-			if( memcmp(&data[offset], &((uint8_t *) &obj)[offset], DATA_PAGE_SIZE) != 0 )
-			{
-				SPI::eeprom.WritePage( ((eeprom_offset / DATA_PAGE_SIZE) + page), &((uint8_t *) &obj)[offset] );
-			}
-		}
+		auto &header = config_obj.header;
+		header.verison = CFG_VERSION;
+		header.counter += 1U;
+		header.crc32 = 0x00000000;
+		header.crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t));
 		
 		return;
 	}
 	
-	void CoolLoad()
+	void WriteConfig(uint16_t page_idx)
 	{
-		uint32_t crc;
+		_PreWriteConfig();
 		
-		// Начальная инициализацяи памяти, когда она или не инициализирована, или поменялась версия.
-		if(SPI::eeprom.ReadByte(EEPROM_OFFSET_MAIN) != obj.verison)
+		uint8_t *data_ptr = (uint8_t *) &config_obj;
+		for(uint16_t i = 0; i < CFG_PAGES_COUNT; ++i)
 		{
-			// Считаем и заполняем CRC данных по умолчанию.
-			obj.crc32 = GetCRCObj();
+			uint16_t page = page_idx + NOR_PAGE_OFFSET + i;
+			uint16_t remaining = sizeof(config_root_t) - (i * NOR_PAGE_SIZE);
+			uint16_t length = (remaining > NOR_PAGE_SIZE) ? NOR_PAGE_SIZE : remaining;
 			
-			// Используем принудительную запись, чтобы гарантировать переписать все ячейки.
-			// Это удалить счётчики и прочии метаданные, но по хорошему это вызывается один раз при первом запуске платы.
-			SPI::eeprom.WriteRaw(EEPROM_OFFSET_MAIN, obj);
-			SPI::eeprom.WriteRaw(EEPROM_OFFSET_MIRROR, obj);
+			SPI::flash.ErasePage(page);
+			SPI::flash.WaitReady();
+			SPI::flash.WritePage(page, (data_ptr + (i * NOR_PAGE_SIZE)), length);
 		}
 		
-		// Читаем основной блок и проверяем CRC
-		SPI::eeprom.ReadRaw(EEPROM_OFFSET_MAIN, obj);
-		crc = GetCRCObj();
-		if(crc == obj.crc32) return;
-		
-		// Читаем запасной блок и проверяем CRC
-		SPI::eeprom.ReadRaw(EEPROM_OFFSET_MIRROR, obj);
-		crc = GetCRCObj();
-		if(crc == obj.crc32) return;
+		return;
+	}
 
-		//Если оба блока данных повреждены, то зависаем
-		Leds::obj.SetOn(Leds::LED_RED);
-		Logger.Printf("EEPROM read error!").PrintNewLine();
-		while(true){}
+	// Ищет актульный (последний) по счётчику записей блок конфигурации
+	// Инициализирует память если требуется
+	// Возвращает индекс страницы откуда для чтения
+	uint16_t _FindConfigPage()
+	{
+		uint16_t cfg_page_idx = 0;
+		
+		config_header_t headers[2];
+		
+		SPI::flash.ReadPage((0 + NOR_PAGE_OFFSET), &((uint8_t *)&headers)[0], sizeof(config_header_t));
+		if(headers[0].verison != CFG_VERSION || headers[0].counter == 0xFFFFFF)
+		{
+			WriteConfig(cfg_page_idx);
+			return cfg_page_idx;
+		}
+		
+		for(uint8_t page_idx = CFG_PAGES_COUNT; page_idx < NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
+		{
+			SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), &((uint8_t *)&headers)[1], sizeof(config_header_t));
+			
+			// Если встретили секцию с несовпадением версии или не инициализированным счётчиком, то эта и следующие секции нам не нужны
+			if(headers[1].verison != CFG_VERSION || headers[1].counter == 0xFFFFFF) break;
+
+			// Если встретили секцию с счётчиков меньше предыдущего, то эта и следующие секции нам не нужны
+			if(headers[1].counter < headers[0].counter) break;
+			
+			// Сравнение счётчика текущей секции с предыдущей
+			if(headers[1].counter > headers[0].counter)
+			{
+				cfg_page_idx = page_idx;
+			}
+
+			// Копируем текущий заголовок в предыдущий
+			headers[0] = headers[1];
+		}
+
+		return cfg_page_idx;
 	}
 	
-	void Dump()
+	bool _CheckCRC()
 	{
-		Logger.Printf("EEPROM Dump(%d): ", SPI::eeprom.EEPROM_MEM_SIZE);
-		uint8_t data;
-		for(uint16_t i = 0; i < SPI::eeprom.EEPROM_MEM_SIZE; ++i)
+		auto &header = config_obj.header;
+		uint32_t old_crc32 = header.crc32;
+		header.crc32 = 0x00000000;
+		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t));
+		header.crc32 = old_crc32;
+		
+		return (old_crc32 == new_crc32);
+	}
+	
+	void ReadConfig(uint16_t page_idx)
+	{
+		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), (uint8_t *)&config_obj, sizeof(config_root_t));
+		if(_CheckCRC() == false)
 		{
-			if(i % 16 == 0)
-			{
-				Logger.Printf("\n %04X | ", i);
-			}
-			
-			if(i % 16 == 8)
-			{
-				Logger.Print(" ");
-			}
-			
-			data = SPI::eeprom.ReadByte(i);
-			Logger.Printf("%02X ", data);
+			DEBUG_LOG_TOPIC("CFG", "Error CRC\n");
+			Error_Handler();
 		}
-		Logger.PrintNewLine();
 		
 		return;
 	}
@@ -278,35 +186,27 @@ namespace Config
 	
 	inline void Setup()
 	{
-		#warning fix it!
-		CoolLoad();
-		
+		global_page_idx = _FindConfigPage();
+		ReadConfig(global_page_idx);
 		
 		return;
 	}
 	
 	inline void Loop(uint32_t &current_time)
 	{
-		static uint32_t last_save_mirror_time = 0;
-		if(current_time - last_save_mirror_time > MIRROR_TIME_SYNC)
-		{
-			last_save_mirror_time = current_time;
-
-			CoolSave(EEPROM_OFFSET_MIRROR);
-		}
-
-		current_time = HAL_GetTick();
-
 		static uint32_t last_save_time = 0;
-		if(current_time - last_save_time > 30000)
+		if(current_time - last_save_time > NOR_WRITE_DELAY_MS)
 		{
 			last_save_time = current_time;
 			
-			CoolSave(EEPROM_OFFSET_MAIN);
+			if(_CheckCRC() == false)
+			{
+				uint16_t page = _GetNextPageIdxToWriteConfig();
+				WriteConfig(page);
+			}
 		}
 		
 		current_time = HAL_GetTick();
-		
 		return;
 	}
 };
