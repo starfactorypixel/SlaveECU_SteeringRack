@@ -97,13 +97,15 @@ namespace Config
 		header.verison = CFG_VERSION;
 		header.counter += 1U;
 		header.crc32 = 0x00000000;
-		header.crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t));
+		header.crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t) / 4);
 		
 		return;
 	}
 	
 	void WriteConfig(uint16_t page_idx)
 	{
+		DEBUG_LOG_TOPIC("CFG", "WriteConfig: page:%d\n", page_idx);
+
 		_PreWriteConfig();
 		
 		uint8_t *data_ptr = (uint8_t *) &config_obj;
@@ -165,7 +167,7 @@ namespace Config
 		auto &header = config_obj.header;
 		uint32_t old_crc32 = header.crc32;
 		header.crc32 = 0x00000000;
-		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t));
+		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t) / 4);
 		header.crc32 = old_crc32;
 		
 		return (old_crc32 == new_crc32);
