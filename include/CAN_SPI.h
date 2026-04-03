@@ -22,6 +22,10 @@ namespace CAN_SPI
 	{
 		bool result;
 		uint32_t time;
+
+		DEBUG_LOG_TOPIC("ExCAN RX", "Port: %d, Addr: %04X, Data(%d): ", can_port, address, length);
+		DEBUG_LOG_ARRAY_HEX("ExCAN RX", data, length);
+		DEBUG_LOG_NEW_LINE();
 		
 		switch(can_port)
 		{
