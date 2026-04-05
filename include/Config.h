@@ -22,7 +22,7 @@ namespace Config
 		После инструментируем счётчик записей, обновляем поле crc32 для всей config_root_t, очищает страницы и записываем данные.
 	*/
 
-	static constexpr uint8_t CFG_VERSION = 3;
+	static constexpr uint8_t CFG_VERSION = 4;
 
 	// Смещение начала блока с конфигом, в страницах
 	static constexpr uint16_t NOR_PAGE_OFFSET = 0;
@@ -36,13 +36,24 @@ namespace Config
 	// Интервал проверки и сохранения буфера в память
 	static constexpr uint32_t NOR_WRITE_DELAY_MS = 30000;
 	
+	// Значние flag_init для инициализированного блока
+	static constexpr uint8_t CFG_FLAG_INIT = 0x77;
+
+	// Значние cnt_fault для инициализированного блока
+	static constexpr uint8_t CNT_NOR_FAULT = (1 << 3) - 1;
 	
 	// Структура заголовка конфигурации в NOR памяти
 	struct __attribute__((packed)) config_header_t
 	{
-		// Версия формата заголовка, а так-же флаг наличия записи в блоке (если 0x00 или 0xFF, то считаем что блок не инициализирован)
-		uint8_t verison;
+		// Флаги инициализации. 0xFF - Блок не инициализирован, 0x00 - Инициализирован
+		uint8_t flag_init;
 
+		// Флаги ошибок. 0x07 - Ошибок нет, 0x00 - Блок не читается
+		uint8_t cnt_fault;
+		
+		// Версия формата заголовка, а так-же флаг наличия записи в блоке (если 0x00 или 0x1F, то считаем что блок не инициализирован)
+		uint8_t verison;
+		
 		// Счётчик записей в память
 		uint32_t counter : 24;
 
@@ -54,7 +65,7 @@ namespace Config
 	struct __attribute__((packed)) config_root_t
 	{
 		// Заголовок
-		config_header_t header;
+		config_header_t header = {};
 		
 		// Блок данных
 		config_body_t body;
@@ -91,9 +102,21 @@ namespace Config
 		return global_page_idx;
 	}
 	
+	uint16_t _GetPrevPageIdxToReadConfig()
+	{
+		if(global_page_idx < CFG_PAGES_COUNT)
+			global_page_idx = NOR_PAGE_COUNT - CFG_PAGES_COUNT;
+		else
+			global_page_idx -= CFG_PAGES_COUNT;
+		
+		return global_page_idx;
+	}
+	
 	void _PreWriteConfig()
 	{
 		auto &header = config_obj.header;
+		header.flag_init = CFG_FLAG_INIT;
+		header.cnt_fault = CNT_NOR_FAULT;
 		header.verison = CFG_VERSION;
 		header.counter += 1U;
 		header.crc32 = 0x00000000;
@@ -124,41 +147,42 @@ namespace Config
 	}
 
 	// Ищет актульный (последний) по счётчику записей блок конфигурации
-	// Инициализирует память если требуется
+	// Инициализирует память если требуется (переписывает блок 0)
 	// Возвращает индекс страницы откуда для чтения
 	uint16_t _FindConfigPage()
 	{
 		uint16_t cfg_page_idx = 0;
 		
-		config_header_t headers[2];
-		
-		SPI::flash.ReadPage((0 + NOR_PAGE_OFFSET), &((uint8_t *)&headers)[0], sizeof(config_header_t));
-		if(headers[0].verison != CFG_VERSION || headers[0].counter == 0xFFFFFF)
-		{
-			WriteConfig(cfg_page_idx);
-			return cfg_page_idx;
-		}
-		
-		for(uint8_t page_idx = CFG_PAGES_COUNT; page_idx < NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
+		config_header_t headers[2] = {};
+		bool is_found = false;
+		for(uint8_t page_idx = 0; page_idx < NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
 		{
 			SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), &((uint8_t *)&headers)[1], sizeof(config_header_t));
+
+			// Если встретили секцию с неинициализированным блоком, то эта и следующие секции нам не нужны
+			if(headers[1].flag_init != CFG_FLAG_INIT) break;
+
+			// Если встретили секцию с израсходованными попытками чтения, то эта секция нам не нужна
+			if(headers[1].cnt_fault == 0x00) continue;
 			
 			// Если встретили секцию с несовпадением версии или не инициализированным счётчиком, то эта и следующие секции нам не нужны
-			if(headers[1].verison != CFG_VERSION || headers[1].counter == 0xFFFFFF) break;
+			if(headers[1].verison != CFG_VERSION) break;
 
 			// Если встретили секцию с счётчиков меньше предыдущего, то эта и следующие секции нам не нужны
 			if(headers[1].counter < headers[0].counter) break;
-			
-			// Сравнение счётчика текущей секции с предыдущей
-			if(headers[1].counter > headers[0].counter)
-			{
-				cfg_page_idx = page_idx;
-			}
 
+			// Все проверки пройдены, - найден цельный блок
+			cfg_page_idx = page_idx;
+			is_found = true;
+			
 			// Копируем текущий заголовок в предыдущий
 			headers[0] = headers[1];
 		}
-
+		
+		// Если первый запуск или аномалия, то инициализируем первый блок
+		if(is_found == false)
+			WriteConfig(cfg_page_idx);
+		
 		return cfg_page_idx;
 	}
 	
@@ -173,23 +197,34 @@ namespace Config
 		return (old_crc32 == new_crc32);
 	}
 	
-	void ReadConfig(uint16_t page_idx)
+	void _IncReadErrorCounter(uint16_t page_idx)
 	{
-		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), (uint8_t *)&config_obj, sizeof(config_root_t));
-		if(_CheckCRC() == false)
-		{
-			DEBUG_LOG_TOPIC("CFG", "Error CRC\n");
-			Error_Handler();
-		}
+		DEBUG_LOG_TOPIC("CFG", "IncReadErrorCounter: page:%d\n", page_idx);
+		
+		uint32_t addr = ((page_idx + NOR_PAGE_OFFSET) * NOR_PAGE_SIZE) + offsetof(config_root_t, header.cnt_fault);
+		uint8_t count_fault = config_obj.header.cnt_fault >> 1;
+		SPI::flash.WriteBytes(addr, &count_fault, 1);
+		SPI::flash.WaitReady();
 		
 		return;
+	}
+	
+	bool ReadConfig(uint16_t page_idx)
+	{
+		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), (uint8_t *)&config_obj, sizeof(config_root_t));
+		
+		return _CheckCRC();
 	}
 	
 	
 	inline void Setup()
 	{
-		global_page_idx = _FindConfigPage();
-		ReadConfig(global_page_idx);
+		uint16_t page_idx = _FindConfigPage();
+		if(ReadConfig(page_idx) == false)
+		{
+			_IncReadErrorCounter(page_idx);
+			HAL_NVIC_SystemReset();
+		}
 		
 		return;
 	}

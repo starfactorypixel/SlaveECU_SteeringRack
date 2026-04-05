@@ -17,5 +17,7 @@ namespace Config
 			bool invert = true;
 			int16_t offset = 0;
 		} rack2;
+
+		uint8_t _padding[2];
 	};
 };
