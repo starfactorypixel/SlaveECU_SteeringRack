@@ -282,8 +282,8 @@ static void MX_GPIO_Init(void)
 
 static void MX_TIM4_Init(void)
 {
-	TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-	TIM_MasterConfigTypeDef sMasterConfig = {0};
+	//TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+	//TIM_MasterConfigTypeDef sMasterConfig = {0};
 	TIM_OC_InitTypeDef sConfigOC = {0};
 
 	htim4.Instance = TIM4;

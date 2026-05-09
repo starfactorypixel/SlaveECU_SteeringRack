@@ -38,100 +38,18 @@ namespace SPI
 		HAL_SPI_WriteReadFast(&hspi2, tx_data, rx_data, length, 200);
 	}
 	
-	
-	
 	SPIManager<3> manager(SPI_Config, SPI_Write, SPI_Read, SPI_WriteRead);
 	SPI_ZD25WQ80C flash({GPIOB, GPIO_PIN_12}, SPI_BAUDRATEPRESCALER_2);
 	SPI_MCP2515 can1({GPIOB, GPIO_PIN_10}, {GPIOB, GPIO_PIN_11}, SPI_BAUDRATEPRESCALER_4);
 	SPI_MCP2515 can2({GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_4}, SPI_BAUDRATEPRESCALER_4);
-
-	/*
-	#define COMPILE_TIME_SIZEOF(t)      template<int s> struct SIZEOF_ ## t ## _IS; \
-										struct foo { \
-											int a,b; \
-										}; \
-										SIZEOF_ ## t ## _IS<sizeof(t)> SIZEOF_ ## t ## _IS;
-
-	COMPILE_TIME_SIZEOF(EasyPin);
-	*/
-
-
-
-
-	void Logic() {
-		uint8_t data[256];
-		uint32_t address = 0x123456;
-
-		//flash.ReadBytes(address, sizeof(data), data);  // Чтение через flash
-
-		uint8_t eepage[32];
-		//eeprom.ReadPage(12, eepage);
-
-		//hc595.SetState(0, 5, 1);
-
-		//hc165.Read();
-
-
-
-	}
-
-
-	void Setup123()
-	{
-	/*
-		flash.ErasePage(0UL);
-		uint8_t nor_data[flash.NOR_PAGE_SIZE];
-		memset(nor_data, 0x00, sizeof(nor_data));
-		nor_data[0] = 0x55;
-		nor_data[0] = 0xEE;
-		nor_data[17] = 0x66;
-		nor_data[35] = 0x77;
-		nor_data[118] = 0x88;
-		nor_data[254] = 0x99;
-		flash.WritePage(0UL, nor_data);
-	*/
-
-	/*
-		uint8_t ee_write[32] = {0x00};
-		ee_write[0] = 0xAA;
-		ee_write[1] = 0xAA;
-		ee_write[12] = 0xAA;
-		ee_write[18] = 0xAA;
-		ee_write[23] = 0xAA;
-		ee_write[31] = 0xAA;
-		eeprom.WritePage(0U, ee_write);
-	*/
 	
-	}
-
-	void qwewqeq()
-	{
-		uint8_t nor_data[flash.NOR_PAGE_SIZE];
-		memset(nor_data, 0x00, sizeof(nor_data));
-		flash.ReadPage(0UL, nor_data);
-
-		DEBUG_LOG_TOPIC("NOR", "Start read\n");
-		DEBUG_LOG_ARRAY_HEX("NOR", nor_data, sizeof(nor_data));
-		Logger.PrintNewLine();
-	}
-
-
-
-
-
-
-
-
+	
 	inline void Setup()
 	{
-		
 		manager.AddDevice(flash);
 		manager.AddDevice(can1);
 		manager.AddDevice(can2);
-
-
 		
-
 		uint8_t dev_id[3] = {0x00};
 		flash.ReadDevID(dev_id);
 		DEBUG_LOG_TOPIC("NOR", "manufacturer ID: 0x%02X, memory type: 0x%02X, memory density: 0x%02X\n", dev_id[0], dev_id[1], dev_id[2]);
@@ -147,18 +65,8 @@ namespace SPI
 	inline void Loop(uint32_t &current_time)
 	{
 		manager.Tick(current_time);
-		Logic();
-
-		static uint32_t last = 0;
-		if(current_time - last > 1500)
-		{
-			last= current_time;
-			//qwewqeq();
-			//qweqwerrr();
-		}
-
-		current_time = HAL_GetTick();
 		
+		current_time = HAL_GetTick();
 		return;
 	}
 }
