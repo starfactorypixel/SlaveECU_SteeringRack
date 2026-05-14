@@ -120,7 +120,7 @@ namespace Config
 		header.verison = CFG_VERSION;
 		header.counter += 1U;
 		header.crc32 = 0x00000000;
-		header.crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t) / 4);
+		header.crc32 = HAL_CRC_Calculate(&hcrc, ((uint32_t *)&config_obj), sizeof(config_root_t) / 4);
 		
 		return;
 	}
@@ -157,7 +157,7 @@ namespace Config
 		bool is_found = false;
 		for(uint8_t page_idx = 0; page_idx < NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
 		{
-			SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), &((uint8_t *)&headers)[1], sizeof(config_header_t));
+			SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), ((uint8_t *)&headers[1]), sizeof(config_header_t));
 
 			// Если встретили секцию с неинициализированным блоком, то эта и следующие секции нам не нужны
 			if(headers[1].flag_init != CFG_FLAG_INIT) break;
@@ -191,7 +191,7 @@ namespace Config
 		auto &header = config_obj.header;
 		uint32_t old_crc32 = header.crc32;
 		header.crc32 = 0x00000000;
-		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *) &config_obj, sizeof(config_root_t) / 4);
+		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, ((uint32_t *)&config_obj), sizeof(config_root_t) / 4);
 		header.crc32 = old_crc32;
 		
 		return (old_crc32 == new_crc32);
@@ -211,7 +211,7 @@ namespace Config
 	
 	bool ReadConfig(uint16_t page_idx)
 	{
-		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), (uint8_t *)&config_obj, sizeof(config_root_t));
+		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), ((uint8_t *)&config_obj), sizeof(config_root_t));
 		
 		return _CheckCRC();
 	}
