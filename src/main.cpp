@@ -101,6 +101,7 @@ int main(void)
 
 	About::Setup();
 	Leds::Setup();
+	Analog::Setup();
 	SPI::Setup();
 	CAN_SPI::Setup();
 	Config::Setup();
@@ -112,6 +113,7 @@ int main(void)
 	{
 		About::Loop(current_time);
 		Leds::Loop(current_time);
+		Analog::Loop(current_time);
 		SPI::Loop(current_time);
 		CAN_SPI::Loop(current_time);
 		Config::Loop(current_time);
