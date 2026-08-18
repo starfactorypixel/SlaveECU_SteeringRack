@@ -4,7 +4,6 @@
 
 extern TIM_HandleTypeDef htim4;
 
-
 namespace SteeringRack
 {
 	
@@ -39,10 +38,10 @@ namespace SteeringRack
 	steering_mode_t mode = STEERING_MODE_NONE;
 	float target = 0.0f;
 
-	//float prevAngleMasterOnModeChange = 0.0f;
-
 	float angleMaster = 0.0f;
 	float angleSlave = 0.0f;
+	int16_t angleMasterInt = 0;
+	int16_t angleSlaveInt = 0;
 
 	bool isSensorsCalculated = false;
 	SteeringAngleSensorBase::error_t lastSensorErrorCode = SteeringAngleSensorBase::ERROR_NONE;
@@ -55,30 +54,25 @@ namespace SteeringRack
 	
 
 
-	void OnChangeMode(steering_mode_t mode);
+	void ChangeMode(steering_mode_t mode);
 
 
 
 	// Получение актуального значения с датчиков
 	void OnDataSensor(rack_id_t id, float angle, float roll, float dt)
 	{
+		// angleMasterInt, angleSlaveInt - временный костыль чтобы были актуальные переменные для отправки в CAN
+
 		if(id == RACK_1)
 		{
-			// Если была ошибка, то в CAN'е окажется послденее валидное значение.
-			CANLib::obj_steering_angle_front.SetValue(0, (angle * 10), CAN_TIMER_TYPE_NORMAL);
-			
 			angleMaster = angle;
+			angleMasterInt = (int16_t)(angle * 10);
 		} else {
-			// Если была ошибка, то в CAN'е окажется послденее валидное значение.
-			CANLib::obj_steering_angle_rear.SetValue(0, (angle * 10), CAN_TIMER_TYPE_NORMAL);
-
 			angleSlave = angle;
+			angleSlaveInt = (int16_t)(angle * 10);
 		}
 		steerings[id].Update(angle, dt);
 		isSensorsCalculated = true;
-
-		//DEBUG_LOG_TOPIC("RACK", "id: %d, a: %f\n",id ,angle);
-
 		
 		return;
 	}
@@ -86,35 +80,36 @@ namespace SteeringRack
 	// Получение кода ошибки с датчиков
 	void OnErrorSensor(rack_id_t id, SteeringAngleSensorBase::error_t code)
 	{
+		// Логическая ошибка. При ошибке с датчика, мы вызываем ChangeMode(STEERING_MODE_NONE), потом когда ошибка снимается вышываем ChangeMode(mode);
+		// т.е. возобновляем режим, но при если в состоянии ошибки в loop() switch(mode) продолжает выполнять старый режим.
+		// Нужно переработать логику ативного режима, его сброса и отправки состояния и ошибок
+
 		if(code > 0)
 		{
 			lastSensorErrorCode = code;
-			OnChangeMode(STEERING_MODE_NONE);
+			ChangeMode(STEERING_MODE_NONE);
 
 		}
 		else
 		{
 			if(lastSensorErrorCode == SteeringAngleSensorBase::ERROR_LOST)
 			{
-				OnChangeMode(STEERING_MODE_NONE);
+				ChangeMode(STEERING_MODE_NONE);
 			}
 			else
 			{
-				OnChangeMode(mode);
+				ChangeMode(mode);
 			}
 		}
 	}
 	
-	// Получение по CANу команды установки режима
-	void OnChangeMode(steering_mode_t mode)
+	// Установить новый режим работы реек
+	void ChangeMode(steering_mode_t mode)
 	{
-		//prevAngleMasterOnModeChange = angleMaster;
-		
 		switch(mode)
 		{
 			case STEERING_MODE_NONE:
 			{
-				//выключить шим
 				steerings[RACK_1].SetStopPWM();
 				steerings[RACK_2].SetStopPWM();
 				break;
@@ -161,18 +156,37 @@ namespace SteeringRack
 				break;
 			}
 		}
-
-		CANLib::obj_turn_mode.SetValue(0, mode, CAN_TIMER_TYPE_NONE, CAN_EVENT_TYPE_NORMAL);
+		
+		CANLib::OnSteeringRackEvent(CANLib::EVENTTYPE_OK);
 		
 		return;
 	}
 	
-	// Получение по CANу команды установки угла поворота
-	void OnChangeTarget(int16_t raw, float target)
+	// Управление режимом через CAN
+	void ChangeMode(uint8_t fId, uint8_t new_mode)
 	{
-		CANLib::obj_target_angle.SetValue(0, raw, CAN_TIMER_TYPE_NONE, CAN_EVENT_TYPE_NORMAL);
-
+		if(fId != 1) return;
+		mode = (steering_mode_t) new_mode;
+		return ChangeMode(mode);
+	}
+	
+	// Управление целевым углом поворота через CAN
+	void ChangeTarget(uint8_t fId, int16_t target)
+	{
+		if(fId != 1) return;
 		return;
+	}
+	
+	// Запрос режима через CAN
+	uint8_t GetMode()
+	{
+		return mode;
+	}
+	
+	// Запрос целевого угла поворота через CAN
+	int16_t GetTarget()
+	{
+		return 0;
 	}
 	
 	
@@ -180,29 +194,7 @@ namespace SteeringRack
 	{
 		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
 		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
-
-		CANLib::obj_turn_mode.RegisterFunctionSet([](can_frame_t &can_frame, can_error_t &error) -> can_result_t
-		{
-			mode = (steering_mode_t)can_frame.data[0];
-			
-			OnChangeMode(mode);
-			
-			can_frame.function_id = CAN_FUNC_EVENT_OK;
-			return CAN_RESULT_CAN_FRAME;
-		});
 		
-		CANLib::obj_target_angle.RegisterFunctionSet([](can_frame_t &can_frame, can_error_t &error) -> can_result_t
-		{
-			int16_t raw = (can_frame.data[0] | (can_frame.data[1] << 8));
-			target = (float)raw / 10.0f;
-
-			OnChangeTarget(raw, target);
-			
-			can_frame.function_id = CAN_FUNC_EVENT_OK;
-			return CAN_RESULT_CAN_FRAME;
-		});
-
-
 		return;
 	}
 	
@@ -212,7 +204,7 @@ namespace SteeringRack
 		{
 			isSensorsCalculated = false;
 			
-			switch (mode)
+			switch(mode)
 			{
 				case STEERING_MODE_NONE:
 				{
