@@ -5,6 +5,7 @@
 #include "SPI.h"
 #include "About.h"
 #include "Leds.h"
+#include "UserBtn.h"
 #include "Config.h"
 #include "SteeringRack.h"
 #include "CAN_SPI.h"
@@ -116,6 +117,7 @@ int main(void)
 
 	About::Setup();
 	Leds::Setup();
+	UserBtn::Setup();
 	Analog::Setup();
 	SPI::Setup();
 	CAN_SPI::Setup();
@@ -128,6 +130,7 @@ int main(void)
 	{
 		About::Loop(current_time);
 		Leds::Loop(current_time);
+		UserBtn::Loop(current_time);
 		Analog::Loop(current_time);
 		SPI::Loop(current_time);
 		CAN_SPI::Loop(current_time);
