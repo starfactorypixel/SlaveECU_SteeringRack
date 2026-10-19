@@ -1,27 +1,35 @@
 #pragma once
 #include <inttypes.h>
+#include <new>
 #include "ConfigData.h"
+#include <CUtils.h>
 
 extern CRC_HandleTypeDef hcrc;
 
 namespace Config
 {
 	/*
-		Под конфиг выделен 1 сектор = 4 КБ или 16 страниц по 256 байт.
-		Данные сохраняются последовательно в каждый сектор по очереди (при условии что данные изменились при проверки CRC32 всей config_root_t).
-		Под данные может быть выделено более одной страницы (256 байт) при этом последовательная логика сохраняется.
-		При чтении вначале читается заголовок и сравнивается со следующим заголовком. Таким образом находится страница самой свежей конфигурации.
-		Затем читается весь блок данных в структуру config_root_t. При этом сохраняется номер страницы актуального конфига и подсчитывается CRC config_root_t, 
-			или чтобы не создавать иной алгоритм используется поле crc32.
-		При записи вначале делается проверка на наличие изменений. Для этого высчитывается новый crc32 для config_root_t ( с учётом замещения crc32 поля нулями на момент расчёта ), 
+		Под конфиг выделено NOR_PAGE_COUNT страниц по 256 байт (по умолчанию 16 страниц = 4 КБ), очистка выполняется постранично.
+		Данные сохраняются последовательно в каждый слот по очереди (при условии что данные изменились при проверки CRC32 всей config_root_t).
+		Под данные (слот) может быть выделено более одной страницы (256 байт) при этом последовательная логика сохраняется.
+		При чтении перебираются все слоты: каждый слот читается целиком в config_root_t и проверяется (flag_init, cnt_fault, version, crc32).
+			Из валидных слотов выбирается слот с максимальным счётчиком записей, - это и есть самая свежая конфигурация.
+			Номер страницы актуального конфига сохраняется в global_page_idx. Порядок слотов в памяти значения не имеет.
+		Слот с несовпавшей crc32 считается битым (например обрыв питания во время записи), пропускается, а его cnt_fault уменьшается.
+			Слот с cnt_fault = 0 пропускается сразу.
+		Если валидных слотов нет (первый запуск, смена CFG_VERSION, неисправная память), то в config_root_t загружаются значения по умолчанию
+			и записываются в слот 0. Перезагрузка не выполняется, блок работает с тем что лежит в RAM.
+		При записи вначале делается проверка на наличие изменений. Для этого высчитывается новый crc32 для config_root_t ( с учётом замещения crc32 поля нулями на момент расчёта ),
 			и сравнивается с сохранённым crc32, что даёт флаг о наличии изменения в настройках.
-		Затем мы инкрементируем счётчик страниц, который получили при чтении с учётом перехода через границу зоны настроек (16 страниц) и размера поля данных, Например:
+		Затем мы инкрементируем счётчик страниц, который получили при чтении с учётом перехода через границу зоны настроек (NOR_PAGE_COUNT страниц) и размера поля данных, Например:
 			Если config_root_t = 1 страницы, то пишем конфиг в   0 >>   1 >> .. >>    15 >>   0 ..
 			Если config_root_t = 2 страницы, то пишем конфиг в 0-1 >> 2-3 >> .. >> 14-15 >> 0-1 ..
-			Если config_root_t = 3 страницы, то пишем конфиг в 0-2 >> 3-5 >> .. >> 12-14 >> 0-2 ..
+			Если config_root_t = 3 страницы, то пишем конфиг в 0-2 >> 3-5 >> .. >> 12-14 >> 0-2 .. ( страница 15 не используется )
 		После инкрементируем счётчик записей, обновляем поле crc32 для всей config_root_t, очищает страницы и записываем данные.
+		Порядок записи страниц не важен: crc32 покрывает всю config_root_t, поэтому недописанный слот не пройдёт проверку,
+			а предыдущий слот при записи не затрагивается.
 	*/
-	
+
 	// Версия структуры конфигурации
 	static constexpr uint8_t CFG_VERSION = 4;
 
@@ -36,26 +44,26 @@ namespace Config
 
 	// Интервал проверки и сохранения буфера в память
 	static constexpr uint32_t NOR_WRITE_DELAY_MS = 30000;
-	
+
 	// Значение flag_init для инициализированного блока
 	static constexpr uint8_t CFG_FLAG_INIT = 0x5A;
 
 	// Значение cnt_fault для инициализированного блока
 	static constexpr uint8_t CNT_NOR_FAULT = (1 << 3) - 1;
-	
+
 	// Структура заголовка конфигурации в NOR памяти
-	struct __attribute__((packed)) config_header_t
+	structpack config_header_t
 	{
 		// Флаги инициализации. CFG_FLAG_INIT - Блок инициализирован, иначе не инициализирован
 		uint8_t flag_init;
 
-		// Флаги ошибок. 0x07 - Ошибок нет, 0x00 - Блок не читается
+		// Флаги ошибок. 0x07 - Ошибок нет, 0x00 - Блок не читается (израсходованы попытки чтения)
 		uint8_t cnt_fault;
-		
-		// Версия формата заголовка, а так-же флаг наличия записи в блоке (если 0x00 или 0x1F, то считаем что блок не инициализирован)
+
+		// Версия формата конфигурации. Блок годен только при точном совпадении с CFG_VERSION
 		uint8_t version;
-		
-		// Счётчик записей в память
+
+		// Счётчик записей в память. 24 бит хватает с запасом: 64 страницы * 100К циклов = 6.4М < 16.7М
 		uint32_t counter : 24;
 
 		// Контрольная сумма всей структуры
@@ -63,55 +71,65 @@ namespace Config
 	};
 
 	// Общая структура всего блока данных
-	struct __attribute__((packed)) config_root_t
+	// Байты лежат строго последовательно (packed), выравнивание на 4 задано только самой переменной config_obj, для HAL_CRC_Calculate
+	structpack config_root_t
 	{
 		// Заголовок
 		config_header_t header = {};
-		
+
 		// Блок данных
 		config_body_t body;
-	} config_obj;
-	
-	
+
+		// Добивка до размера кратного 4 байтам (для CRC32), может быть нулевой длины
+		uint8_t _align[(4 - ((sizeof(config_header_t) + sizeof(config_body_t)) % 4)) % 4] = {};
+	} config_obj __attribute__((aligned(4)));
+
+
 	// Кол-во страниц, которые занимает весь конфиг целиком
 	static constexpr uint16_t CFG_PAGES_COUNT = (sizeof(config_root_t) + (NOR_PAGE_SIZE - 1)) / NOR_PAGE_SIZE;
-	
+
+	// Кол-во слотов под конфиг в зоне настроек
+	static constexpr uint16_t CFG_SLOTS_COUNT = NOR_PAGE_COUNT / CFG_PAGES_COUNT;
+
 	// Работаем с CRC32, поэтому общий размер структуры должен быть кратен 4 байтам
 	static_assert(sizeof(config_root_t) % 4 == 0, "config_root_t size must be divisible by 4 bytes");
 
+	// Нужно минимум 2 слота, иначе обрыв питания во время записи уничтожит единственную копию
+	static_assert(CFG_SLOTS_COUNT >= 2, "NOR_PAGE_COUNT must fit at least 2 config slots");
+
 	// Проверяем, что диапазон страниц помещается в доступную NOR Flash
 	static_assert(NOR_PAGE_OFFSET + NOR_PAGE_COUNT - 1 <= SPI::flash.NOR_MAX_PAGE, "NOR page range exceeds available flash memory");
-	
-	
+
+
 	// Индекс последний страницы с актуальным конфигом, без учёта NOR_PAGE_OFFSET
 	uint16_t global_page_idx = 0;
-	
-	
+
+
 	config_body_t &Obj()
 	{
 		return config_obj.body;
 	}
-	
-	
+
+
 	uint16_t _GetNextPageIdxToWriteConfig()
 	{
 		global_page_idx += CFG_PAGES_COUNT;
 		if(global_page_idx + CFG_PAGES_COUNT > NOR_PAGE_COUNT)
 			global_page_idx = 0;
-		
+
 		return global_page_idx;
 	}
-	
+
 	uint16_t _GetPrevPageIdxToReadConfig()
 	{
 		if(global_page_idx < CFG_PAGES_COUNT)
-			global_page_idx = NOR_PAGE_COUNT - CFG_PAGES_COUNT;
+			global_page_idx = (CFG_SLOTS_COUNT - 1) * CFG_PAGES_COUNT;
 		else
 			global_page_idx -= CFG_PAGES_COUNT;
-		
+
 		return global_page_idx;
 	}
-	
+
 	void _PreWriteConfig()
 	{
 		auto &header = config_obj.header;
@@ -121,68 +139,88 @@ namespace Config
 		header.counter += 1U;
 		header.crc32 = 0x00000000;
 		header.crc32 = HAL_CRC_Calculate(&hcrc, ((uint32_t *)&config_obj), sizeof(config_root_t) / 4);
-		
+
 		return;
 	}
-	
+
 	void WriteConfig(uint16_t page_idx)
 	{
 		DEBUG_LOG_TOPIC("CFG", "WriteConfig: page:%d\n", page_idx);
 
 		_PreWriteConfig();
-		
+
 		uint8_t *data_ptr = (uint8_t *) &config_obj;
 		for(uint16_t i = 0; i < CFG_PAGES_COUNT; ++i)
 		{
 			uint16_t page = page_idx + NOR_PAGE_OFFSET + i;
 			uint16_t remaining = sizeof(config_root_t) - (i * NOR_PAGE_SIZE);
 			uint16_t length = (remaining > NOR_PAGE_SIZE) ? NOR_PAGE_SIZE : remaining;
-			
+
 			SPI::flash.ErasePage(page);
-			SPI::flash.WaitReady();
 			SPI::flash.WritePage(page, (data_ptr + (i * NOR_PAGE_SIZE)), length);
 		}
-		
+
 		return;
 	}
 
-	// Ищет актуальный (последний) по счётчику записей блок конфигурации
-	// Инициализирует память если требуется (переписывает блок 0)
-	// Возвращает индекс страницы откуда для чтения
+	bool ReadConfig(uint16_t page_idx);
+	void _IncReadErrorCounter(uint16_t page_idx);
+	
+	// Ищет актуальный (с максимальным счётчиком записей) валидный блок конфигурации и загружает его в config_obj
+	// Инициализирует память значениями по умолчанию если валидных блоков нет (переписывает блок 0)
+	// Возвращает индекс страницы актуального конфига
 	uint16_t _FindConfigPage()
 	{
 		uint16_t cfg_page_idx = 0;
-		
-		config_header_t headers[2] = {};
-		bool is_found = false;
-		for(uint8_t page_idx = 0; page_idx < NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
-		{
-			SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), ((uint8_t *)&headers[1]), sizeof(config_header_t));
+		uint32_t cfg_counter = 0;
 
-			// Если встретили секцию с неинициализированным блоком, то эта и следующие секции нам не нужны
-			if(headers[1].flag_init != CFG_FLAG_INIT) break;
+		bool is_found = false;
+		for(uint16_t page_idx = 0; page_idx + CFG_PAGES_COUNT <= NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
+		{
+			bool is_crc_ok = ReadConfig(page_idx);
+			auto &header = config_obj.header;
+
+			// Если встретили секцию с неинициализированным блоком, то эта секция нам не нужна
+			if(header.flag_init != CFG_FLAG_INIT) continue;
 
 			// Если встретили секцию с израсходованными попытками чтения, то эта секция нам не нужна
-			if(headers[1].cnt_fault == 0x00) continue;
-			
-			// Если встретили секцию с несовпадением версии или не инициализированным счётчиком, то эта и следующие секции нам не нужны
-			if(headers[1].version != CFG_VERSION) break;
+			if(header.cnt_fault == 0x00) continue;
 
-			// Если встретили секцию с счётчиков меньше предыдущего, то эта и следующие секции нам не нужны
-			if(headers[1].counter < headers[0].counter) break;
+			// Если встретили секцию с несовпадением версии, то эта секция нам не нужна
+			if(header.version != CFG_VERSION) continue;
 
-			// Все проверки пройдены, - найден цельный блок
-			cfg_page_idx = page_idx;
-			is_found = true;
-			
-			// Копируем текущий заголовок в предыдущий
-			headers[0] = headers[1];
+			// Если встретили секцию с битыми данными, то уменьшаем её счётчик попыток, и эта секция нам не нужна
+			if(is_crc_ok == false)
+			{
+				_IncReadErrorCounter(page_idx);
+				continue;
+			}
+
+			// Все проверки пройдены, - найден цельный блок. Запоминаем его, если он свежее найденного ранее
+			if(is_found == false || header.counter > cfg_counter)
+			{
+				cfg_page_idx = page_idx;
+				cfg_counter = header.counter;
+				is_found = true;
+			}
 		}
-		
-		// Если первый запуск или аномалия, то инициализируем первый блок
+
+		// В config_obj сейчас последний прочитанный слот, перечитываем найденный
+		if(is_found == true && ReadConfig(cfg_page_idx) == false)
+			is_found = false;
+
+		// Если первый запуск или аномалия, то загружаем значения по умолчанию и инициализируем первый блок
 		if(is_found == false)
+		{
+			DEBUG_LOG_TOPIC("CFG", "Valid config not found, load defaults\n");
+
+			cfg_page_idx = 0;
+			new (&config_obj) config_root_t();
 			WriteConfig(cfg_page_idx);
-		
+		}
+
+		global_page_idx = cfg_page_idx;
+
 		return cfg_page_idx;
 	}
 	
@@ -193,56 +231,54 @@ namespace Config
 		header.crc32 = 0x00000000;
 		uint32_t new_crc32 = HAL_CRC_Calculate(&hcrc, ((uint32_t *)&config_obj), sizeof(config_root_t) / 4);
 		header.crc32 = old_crc32;
-		
+
 		return (old_crc32 == new_crc32);
 	}
-	
+
 	void _IncReadErrorCounter(uint16_t page_idx)
 	{
 		DEBUG_LOG_TOPIC("CFG", "IncReadErrorCounter: page:%d\n", page_idx);
-		
+
+		// Пишем поверх без очистки: в NOR биты меняются только 1 >> 0, поэтому 0x07 >> 0x03 >> 0x01 >> 0x00
 		uint32_t addr = ((page_idx + NOR_PAGE_OFFSET) * NOR_PAGE_SIZE) + offsetof(config_root_t, header.cnt_fault);
 		uint8_t count_fault = config_obj.header.cnt_fault >> 1;
 		SPI::flash.WriteBytes(addr, &count_fault, 1);
-		SPI::flash.WaitReady();
-		
+
 		return;
 	}
-	
+
 	bool ReadConfig(uint16_t page_idx)
 	{
+		// Если флешки нет, то статус читается как 0xFF (вечно busy), WaitReady() вернёт false и ReadPage не тронет буфер.
+		// Очищаем заголовок, чтобы данные предыдущего слота не прошли проверку повторно
+		config_obj.header = {};
+
 		SPI::flash.ReadPage((page_idx + NOR_PAGE_OFFSET), ((uint8_t *)&config_obj), sizeof(config_root_t));
-		
+
 		return _CheckCRC();
 	}
-	
-	
+
 	inline void Setup()
 	{
-		uint16_t page_idx = _FindConfigPage();
-		if(ReadConfig(page_idx) == false)
-		{
-			_IncReadErrorCounter(page_idx);
-			HAL_NVIC_SystemReset();
-		}
-		
+		_FindConfigPage();
+
 		return;
 	}
-	
+
 	inline void Loop(uint32_t &current_time)
 	{
 		static uint32_t last_save_time = 0;
 		if(current_time - last_save_time > NOR_WRITE_DELAY_MS)
 		{
 			last_save_time = current_time;
-			
+
 			if(_CheckCRC() == false)
 			{
 				uint16_t page = _GetNextPageIdxToWriteConfig();
 				WriteConfig(page);
 			}
 		}
-		
+
 		current_time = HAL_GetTick();
 		return;
 	}

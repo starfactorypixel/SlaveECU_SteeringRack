@@ -1,11 +1,12 @@
 #pragma once
 #include <inttypes.h>
+#include <CUtils.h>
 
 namespace Config
 {
-	struct __attribute__((packed)) config_body_t
+	structpack config_body_t
 	{
-		struct
+		structpack
 		{
 			bool maintenance = true;	// Режим настройки
 			uint16_t base_id = 0x01A0;	// Базовый CAN ID
@@ -15,19 +16,17 @@ namespace Config
 			uint8_t _fill[32 - 7];
 		} system;
 		
-		struct
+		structpack
 		{
 			bool enable = true;
 			bool invert = false;
 			int16_t offset = 0;
 		} rack1;
-		struct
+		structpack
 		{
 			bool enable = true;
 			bool invert = true;
 			int16_t offset = 0;
 		} rack2;
-
-		//uint8_t _padding[2];
 	};
 };
