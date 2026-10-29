@@ -117,11 +117,11 @@ int main(void)
 
 	About::Setup();
 	Leds::Setup();
-	UserBtn::Setup();
+	//UserBtn::Setup();
 	Analog::Setup();
 	SPI::Setup();
-	CAN_SPI::Setup();
 	Config::Setup();
+	CAN_SPI::Setup();
 	CANLib::Setup();
 	SteeringRack::Setup();
 
@@ -130,11 +130,11 @@ int main(void)
 	{
 		About::Loop(current_time);
 		Leds::Loop(current_time);
-		UserBtn::Loop(current_time);
+		//UserBtn::Loop(current_time);
 		Analog::Loop(current_time);
 		SPI::Loop(current_time);
-		CAN_SPI::Loop(current_time);
 		Config::Loop(current_time);
+		CAN_SPI::Loop(current_time);
 		CANLib::Loop(current_time);
 		SteeringRack::Loop(current_time);
 	}
