@@ -127,44 +127,6 @@ namespace Config
 	uint16_t global_page_idx = 0;
 
 
-	config_body_t &Obj()
-	{
-		return config_obj.body;
-	}
-	
-	// Сброс пользовательских настроек на значения по умолчанию, модуль system сохраняется.
-	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
-	void ResetUser()
-	{
-		auto system = config_obj.body.system;
-		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
-		config_obj.body.system = system;
-		
-		return;
-	}
-	
-	// Сброс всех настроек, включая модуль system, на значения по умолчанию.
-	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
-	void ResetAll()
-	{
-		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
-		
-		return;
-	}
-	
-	// Сохраняет настройки в NOR память сейчас, если они изменились (не совпадает crc32). Интервал сохранения в Loop не сбрасывается
-	inline void Commit()
-	{
-		if(_CheckCRC() == false)
-		{
-			uint16_t page = _GetNextPageIdxToWriteConfig();
-			_WriteConfig(page);
-		}
-
-		return;
-	}
-	
-
 	uint16_t _GetNextPageIdxToWriteConfig()
 	{
 		global_page_idx += CFG_PAGES_COUNT;
@@ -335,7 +297,45 @@ namespace Config
 
 		return _CheckCRC();
 	}
+	
+	
+	config_body_t &Obj()
+	{
+		return config_obj.body;
+	}
+	
+	// Сброс пользовательских настроек на значения по умолчанию, модуль system сохраняется.
+	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
+	void ResetUser()
+	{
+		auto system = config_obj.body.system;
+		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
+		config_obj.body.system = system;
+		
+		return;
+	}
+	
+	// Сброс всех настроек, включая модуль system, на значения по умолчанию.
+	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
+	void ResetAll()
+	{
+		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
+		
+		return;
+	}
+	
+	// Сохраняет настройки в NOR память сейчас, если они изменились (не совпадает crc32). Интервал сохранения в Loop не сбрасывается
+	inline void Commit()
+	{
+		if(_CheckCRC() == false)
+		{
+			uint16_t page = _GetNextPageIdxToWriteConfig();
+			_WriteConfig(page);
+		}
 
+		return;
+	}
+	
 	inline void Setup()
 	{
 		_FindConfigPage();
