@@ -34,6 +34,9 @@ namespace Config
 		После загрузки слота модули тела приводятся к текущей прошивке: заголовки модулей и поля, которых не знала прошивка, записавшая блок,
 			берутся из CFG_DEFAULTS. Поэтому дописанные в конец модуля поля не требуют смены CFG_VERSION (см. Config.h платы).
 			Если что-то изменилось, то crc32 не совпадёт и Loop сохранит обновлённый блок.
+		ResetUser() и ResetAll() сбрасывают настройки на значения по умолчанию (без модуля system или все). Сохранение так же выполняет Loop,
+			для немедленного сохранения - Commit().
+			Для ResetUser() в config_body_t платы обязателен модуль system.
 	*/
 
 	// Размер страницы NOR
@@ -128,7 +131,39 @@ namespace Config
 	{
 		return config_obj.body;
 	}
+	
+	// Сброс пользовательских настроек на значения по умолчанию, модуль system сохраняется.
+	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
+	void ResetUser()
+	{
+		auto system = config_obj.body.system;
+		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
+		config_obj.body.system = system;
+		
+		return;
+	}
+	
+	// Сброс всех настроек, включая модуль system, на значения по умолчанию.
+	// Сохранение в NOR память выполнит Loop, т.к. crc32 перестанет совпадать, или сразу Commit()
+	void ResetAll()
+	{
+		memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
+		
+		return;
+	}
+	
+	// Сохраняет настройки в NOR память сейчас, если они изменились (не совпадает crc32). Интервал сохранения в Loop не сбрасывается
+	inline void Commit()
+	{
+		if(_CheckCRC() == false)
+		{
+			uint16_t page = _GetNextPageIdxToWriteConfig();
+			_WriteConfig(page);
+		}
 
+		return;
+	}
+	
 
 	uint16_t _GetNextPageIdxToWriteConfig()
 	{
@@ -162,9 +197,9 @@ namespace Config
 		return;
 	}
 
-	void WriteConfig(uint16_t page_idx)
+	void _WriteConfig(uint16_t page_idx)
 	{
-		DEBUG_LOG_TOPIC("CFG", "WriteConfig: page:%d\n", page_idx);
+		DEBUG_LOG_TOPIC("CFG", "_WriteConfig: page:%d\n", page_idx);
 
 		_PreWriteConfig();
 
@@ -201,7 +236,7 @@ namespace Config
 		return;
 	}
 
-	bool ReadConfig(uint16_t page_idx);
+	bool _ReadConfig(uint16_t page_idx);
 	void _IncReadErrorCounter(uint16_t page_idx);
 	
 	// Ищет актуальный (с максимальным счётчиком записей) валидный блок конфигурации и загружает его в config_obj
@@ -215,7 +250,7 @@ namespace Config
 		bool is_found = false;
 		for(uint16_t page_idx = 0; page_idx + CFG_PAGES_COUNT <= NOR_PAGE_COUNT; page_idx += CFG_PAGES_COUNT)
 		{
-			bool is_crc_ok = ReadConfig(page_idx);
+			bool is_crc_ok = _ReadConfig(page_idx);
 			auto &header = config_obj.header;
 
 			// Если встретили секцию с неинициализированным блоком, то эта секция нам не нужна
@@ -244,7 +279,7 @@ namespace Config
 		}
 
 		// В config_obj сейчас последний прочитанный слот, перечитываем найденный
-		if(is_found == true && ReadConfig(cfg_page_idx) == false)
+		if(is_found == true && _ReadConfig(cfg_page_idx) == false)
 			is_found = false;
 
 		// Новые поля модулей получают значения по умолчанию
@@ -259,7 +294,7 @@ namespace Config
 			cfg_page_idx = 0;
 			config_obj.header = {};
 			memcpy(&config_obj.body, &CFG_DEFAULTS, sizeof(config_body_t));
-			WriteConfig(cfg_page_idx);
+			_WriteConfig(cfg_page_idx);
 		}
 
 		global_page_idx = cfg_page_idx;
@@ -290,7 +325,7 @@ namespace Config
 		return;
 	}
 
-	bool ReadConfig(uint16_t page_idx)
+	bool _ReadConfig(uint16_t page_idx)
 	{
 		// Если флешки нет, то статус читается как 0xFF (вечно busy), WaitReady() вернёт false и ReadPage не тронет буфер.
 		// Очищаем заголовок, чтобы данные предыдущего слота не прошли проверку повторно
@@ -315,11 +350,7 @@ namespace Config
 		{
 			last_save_time = current_time;
 
-			if(_CheckCRC() == false)
-			{
-				uint16_t page = _GetNextPageIdxToWriteConfig();
-				WriteConfig(page);
-			}
+			Commit();
 		}
 
 		current_time = HAL_GetTick();
