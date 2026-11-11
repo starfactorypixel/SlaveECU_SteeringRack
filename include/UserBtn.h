@@ -7,22 +7,18 @@ namespace UserBtn
 	void OnEventOnStart(DrakeButton::Event ev, uint32_t ms);
 	void OnEventOnRun(DrakeButton::Event ev, uint32_t ms);
 	
-	DrakeButton btn({GPIOA, GPIO_PIN_8}, HAL_GetTick, OnEventOnStart);
+	DrakeButton btn({GPIOA, GPIO_PIN_8}, OnEventOnStart);
 	
-	bool wait_release = false;
 	bool need_reset_cfg = false;
 	
 	
+	// При старте маска = только EV_LONG_HOLD, так что сюда приходит только оно.
 	void OnEventOnStart(DrakeButton::Event ev, uint32_t ms)
 	{
-		if(ev == DrakeButton::EV_LONG_HOLD)
+		if(need_reset_cfg == false)
 		{
 			need_reset_cfg = true;
 			Leds::obj.SetOn(Leds::LED_RED);
-		}
-		else
-		{
-			wait_release = false; // CLICK, DOUBLE_CLICK или LONG_RELEASE - кнопку отпустили
 		}
 		
 		return;
@@ -54,16 +50,16 @@ namespace UserBtn
 	inline void Setup()
 	{
 		btn.Init();
-		if(btn.IsPressed() == true)
+		btn.SetMask(DrakeButton::EV_LONG_HOLD);
+		btn.SetTimings(30, 300, 15000, 1000);
+		
+		// Ждём, пока библиотека определит состояние кнопки, а если она нажата - пока не отпустят.
+		do
 		{
-			btn.SetTimings(30, 300, 15000, 1000);
-			wait_release = true;
-			while(wait_release == true)
-			{
-				btn.Tick();
-			}
-		}
+			btn.Tick(HAL_GetTick());
+		} while(btn.IsReady() == false || btn.IsPressed() == true);
 
+		btn.SetMask(DrakeButton::EV_ALL);
 		btn.SetTimings(30, 300, 800, 1000);
 		btn.SetCallback(OnEventOnRun);
 		
@@ -72,7 +68,7 @@ namespace UserBtn
 	
 	inline void Loop(uint32_t &current_time)
 	{
-		btn.Tick();
+		btn.Tick(current_time);
 		
 		current_time = HAL_GetTick();
 		return;
